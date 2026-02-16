@@ -28,12 +28,57 @@ It is optimized for:
 - `codex-sandbox`: Launcher script (`build`, `shell`, `exec`, `status`, `stop`, `destroy`).
 - `.dockerignore`: Keeps image builds lightweight.
 
-## Preinstalled Tooling
+## Included Software
 
-- Codex CLI (`@openai/codex`, latest at build time)
-- .NET SDK (latest `LTS` channel by default)
-- `asdf-vm` (installed in `/opt/asdf-vm`, on `PATH`)
-- Common utilities (`git`, `ripgrep`, `python3`, `build-essential`, etc.)
+The container currently includes the following software from `Dockerfile`.
+
+### Base Image
+
+- `node:22-bookworm`
+
+### Runtimes and CLIs
+
+- Node.js 22 + npm (from base image)
+- Codex CLI: `@openai/codex` (latest at build time)
+- .NET SDK: installed via `dotnet-install.sh` using `DOTNET_CHANNEL` (default: `LTS`)
+- `asdf-vm`: installed to `/opt/asdf-vm` using `ASDF_VERSION` (default: `v0.15.0`)
+- Python: `python3`, `pip`, and `venv`
+
+### System Packages
+
+- `bash`
+- `build-essential`
+- `ca-certificates`
+- `curl`
+- `dirmngr`
+- `fd-find`
+- `gawk`
+- `git`
+- `gpg`
+- `gpg-agent`
+- `gnupg`
+- `jq`
+- `less`
+- `openssh-client`
+- `python3`
+- `python3-pip`
+- `python3-venv`
+- `ripgrep`
+- `sudo`
+- `unzip`
+- `vim`
+- `zip`
+
+You can verify installed versions from a running sandbox with:
+
+```bash
+sb exec node --version
+sb exec npm --version
+sb exec codex --version
+sb exec dotnet --version
+sb exec asdf --version
+sb exec python3 --version
+```
 
 ## Requirements
 
