@@ -31,7 +31,7 @@ CODEX_AUTH_DIR="${CODEX_AUTH_DIR:-$HOME/.codex}"
 WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
 
 subcommand="codex"
-if [[ "${1:-}" =~ ^(build|shell|exec|codex|stop|destroy|status|help)$ ]]; then
+if [[ "${1:-}" =~ ^(build|shell|exec|install-tools|codex|stop|destroy|status|help)$ ]]; then
   subcommand="$1"
   shift
 fi
@@ -140,6 +140,49 @@ run_exec() {
   docker exec -it "$CONTAINER_NAME" bash -lc "cd \"$WORKSPACE_DIR\" && exec \"\$@\"" -- "$@"
 }
 
+run_install_tools() {
+  ensure_image
+  ensure_container
+  docker exec -it "$CONTAINER_NAME" bash -lc '
+set -euo pipefail
+cd "$1"
+
+if [[ ! -f .tool-versions ]]; then
+  echo "ERROR: .tool-versions not found in $PWD" >&2
+  exit 1
+fi
+
+tools="$(awk "
+  /^[[:space:]]*#/ { next }
+  /^[[:space:]]*$/ { next }
+  { print \$1 }
+" .tool-versions | sort -u)"
+
+if [[ -z "$tools" ]]; then
+  echo "No tools found in .tool-versions."
+  exit 0
+fi
+
+existing_plugins="$(asdf plugin list 2>/dev/null || true)"
+
+echo "Ensuring asdf plugins are available..."
+while IFS= read -r plugin; do
+  [[ -z "$plugin" ]] && continue
+  if printf "%s\n" "$existing_plugins" | grep -qx "$plugin"; then
+    echo "  - $plugin (already added)"
+  else
+    echo "  - $plugin (adding)"
+    asdf plugin add "$plugin"
+    existing_plugins="$existing_plugins"$'\n'"$plugin"
+  fi
+done <<< "$tools"
+
+echo "Installing versions declared in .tool-versions..."
+asdf install
+echo "Done."
+' _ "$WORKSPACE_DIR"
+}
+
 show_help() {
   cat <<'USAGE'
 Usage:
@@ -148,6 +191,7 @@ Usage:
   ./codex-sandbox build [docker build args...]
   ./codex-sandbox shell
   ./codex-sandbox exec <command...>
+  ./codex-sandbox install-tools
   ./codex-sandbox status
   ./codex-sandbox stop
   ./codex-sandbox destroy
@@ -210,6 +254,9 @@ case "$subcommand" in
     ;;
   exec)
     run_exec "$@"
+    ;;
+  install-tools)
+    run_install_tools
     ;;
   codex)
     run_codex "$@"

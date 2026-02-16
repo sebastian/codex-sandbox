@@ -26,6 +26,9 @@ SOURCE_DIR=/absolute/path/to/repo sb shell
 
 # run one command in the mounted workspace
 SOURCE_DIR=/absolute/path/to/repo sb exec git status
+
+# install tools from .tool-versions in mounted workspace
+SOURCE_DIR=/absolute/path/to/repo sb install-tools
 ```
 
 ## Commands
@@ -34,13 +37,14 @@ SOURCE_DIR=/absolute/path/to/repo sb exec git status
 - `sb build [docker build args...]`
 - `sb shell`
 - `sb exec <command...>`
+- `sb install-tools`
 - `sb status`
 - `sb stop`
 - `sb destroy`
 
 ## Included software
 
-- Base: `node:22-bookworm`
+- Base: `node:current-bookworm`
 - Codex CLI: `@openai/codex`
 - .NET SDK: installed from `DOTNET_CHANNEL` (default `LTS`)
 - `asdf-vm`: installed from `ASDF_VERSION` (default `v0.15.0`)
@@ -68,6 +72,8 @@ sb exec python3 --version
 
 - Keep `SOURCE_DIR` scoped to what Codex should modify.
 - If Docker is not running, commands will fail until Docker starts.
+- `sb install-tools` reads `.tool-versions`, adds missing asdf plugins, and runs `asdf install`.
+- Installed tool versions are cached by the persistent per-`SOURCE_DIR` container.
 - To fully reset a repo sandbox: `SOURCE_DIR=/path sb destroy`.
 
 ## License

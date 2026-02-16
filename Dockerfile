@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:current-bookworm
 
 ARG DOTNET_CHANNEL=LTS
 ARG ASDF_VERSION=v0.15.0
