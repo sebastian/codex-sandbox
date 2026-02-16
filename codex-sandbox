@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_script_dir() {
+  local script_path source_dir link_target
+  script_path="${BASH_SOURCE[0]}"
+
+  if [[ "$script_path" != /* ]]; then
+    script_path="$PWD/$script_path"
+  fi
+
+  while [[ -L "$script_path" ]]; do
+    source_dir="$(cd -P "$(dirname "$script_path")" && pwd)"
+    link_target="$(readlink "$script_path")"
+    if [[ "$link_target" == /* ]]; then
+      script_path="$link_target"
+    else
+      script_path="$source_dir/$link_target"
+    fi
+  done
+
+  cd -P "$(dirname "$script_path")" && pwd
+}
+
+SCRIPT_DIR="$(resolve_script_dir)"
+DOCKERFILE_PATH="${DOCKERFILE_PATH:-$SCRIPT_DIR/Dockerfile}"
+
+IMAGE_NAME="${IMAGE_NAME:-codex-sandbox:latest}"
+SOURCE_DIR="${SOURCE_DIR:-$PWD}"
+CODEX_AUTH_DIR="${CODEX_AUTH_DIR:-$HOME/.codex}"
+WORKSPACE_DIR="${WORKSPACE_DIR:-/workspace}"
+
+subcommand="codex"
+if [[ "${1:-}" =~ ^(build|shell|exec|codex|stop|destroy|status|help)$ ]]; then
+  subcommand="$1"
+  shift
+fi
+
+if [[ ! -d "$SOURCE_DIR" ]]; then
+  echo "ERROR: SOURCE_DIR does not exist: $SOURCE_DIR" >&2
+  exit 1
+fi
+SOURCE_DIR="$(cd "$SOURCE_DIR" && pwd -P)"
+
+if [[ ! -d "$CODEX_AUTH_DIR" ]]; then
+  echo "ERROR: CODEX_AUTH_DIR does not exist: $CODEX_AUTH_DIR" >&2
+  exit 1
+fi
+CODEX_AUTH_DIR="$(cd "$CODEX_AUTH_DIR" && pwd -P)"
+
+hash_source_dir() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$SOURCE_DIR" | shasum | awk '{print substr($1,1,12)}'
+  elif command -v sha1sum >/dev/null 2>&1; then
+    printf '%s' "$SOURCE_DIR" | sha1sum | awk '{print substr($1,1,12)}'
+  else
+    printf '%s' "$SOURCE_DIR" | cksum | awk '{print $1}'
+  fi
+}
+
+container_hash="$(hash_source_dir)"
+CONTAINER_NAME="${CONTAINER_NAME:-codex-sandbox-${container_hash}}"
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: docker command not found. Install Docker first." >&2
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker daemon is not reachable. Start Docker Desktop/Engine and retry." >&2
+    exit 1
+  fi
+}
+
+build_image() {
+  require_docker
+  if [[ ! -f "$DOCKERFILE_PATH" ]]; then
+    echo "ERROR: Dockerfile not found at $DOCKERFILE_PATH" >&2
+    exit 1
+  fi
+  docker build "$@" -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$SCRIPT_DIR"
+}
+
+ensure_image() {
+  require_docker
+  if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+    echo "Image $IMAGE_NAME not found. Building it now..."
+    build_image
+  fi
+}
+
+ensure_container() {
+  if ! docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    echo "Creating container $CONTAINER_NAME for SOURCE_DIR=$SOURCE_DIR"
+
+    docker create \
+      --name "$CONTAINER_NAME" \
+      --hostname "$CONTAINER_NAME" \
+      --init \
+      -w "$WORKSPACE_DIR" \
+      -e HOME=/root \
+      -e SHELL=/bin/bash \
+      -v "$SOURCE_DIR:$WORKSPACE_DIR" \
+      -v "$CODEX_AUTH_DIR:/root/.codex" \
+      -v codex-sandbox-npm:/root/.npm \
+      -v codex-sandbox-cache:/root/.cache \
+      -v codex-sandbox-cargo:/root/.cargo \
+      "$IMAGE_NAME" \
+      sleep infinity >/dev/null
+  fi
+
+  local running
+  running="$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME")"
+  if [[ "$running" != "true" ]]; then
+    docker start "$CONTAINER_NAME" >/dev/null
+  fi
+}
+
+run_codex() {
+  ensure_image
+  ensure_container
+  docker exec -it -w "$WORKSPACE_DIR" "$CONTAINER_NAME" \
+    codex --dangerously-bypass-approvals-and-sandbox "$@"
+}
+
+run_shell() {
+  ensure_image
+  ensure_container
+  # Force entry into mounted workspace even if shell startup files change directory.
+  docker exec -it "$CONTAINER_NAME" bash -lc "cd \"$WORKSPACE_DIR\" && exec bash -i"
+}
+
+run_exec() {
+  ensure_image
+  ensure_container
+  if [[ "$#" -eq 0 ]]; then
+    echo "ERROR: exec requires a command. Example: ./codex-sandbox exec git status" >&2
+    exit 1
+  fi
+  docker exec -it "$CONTAINER_NAME" bash -lc "cd \"$WORKSPACE_DIR\" && exec \"\$@\"" -- "$@"
+}
+
+show_help() {
+  cat <<'USAGE'
+Usage:
+  ./codex-sandbox [codex args...]
+  ./codex-sandbox codex [codex args...]
+  ./codex-sandbox build [docker build args...]
+  ./codex-sandbox shell
+  ./codex-sandbox exec <command...>
+  ./codex-sandbox status
+  ./codex-sandbox stop
+  ./codex-sandbox destroy
+
+Environment variables:
+  SOURCE_DIR      Host directory to mount at /workspace (default: current directory)
+  CODEX_AUTH_DIR  Host Codex state directory to mount (default: $HOME/.codex)
+  IMAGE_NAME      Docker image tag to use/build (default: codex-sandbox:latest)
+  WORKSPACE_DIR   Container mount/work dir (default: /workspace)
+  DOCKERFILE_PATH Dockerfile path (default: script_dir/Dockerfile)
+  CONTAINER_NAME  Override generated container name
+USAGE
+}
+
+stop_container() {
+  require_docker
+  if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    docker stop "$CONTAINER_NAME" >/dev/null
+    echo "Stopped $CONTAINER_NAME"
+  else
+    echo "Container $CONTAINER_NAME does not exist"
+  fi
+}
+
+destroy_container() {
+  require_docker
+  if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    docker rm -f "$CONTAINER_NAME" >/dev/null
+    echo "Removed $CONTAINER_NAME"
+  else
+    echo "Container $CONTAINER_NAME does not exist"
+  fi
+}
+
+show_status() {
+  require_docker
+  if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    local status
+    status="$(docker inspect -f '{{.State.Status}}' "$CONTAINER_NAME")"
+    echo "container=$CONTAINER_NAME"
+    echo "status=$status"
+    echo "image=$IMAGE_NAME"
+    echo "source_dir=$SOURCE_DIR"
+    echo "codex_auth_dir=$CODEX_AUTH_DIR"
+  else
+    echo "container=$CONTAINER_NAME"
+    echo "status=missing"
+    echo "image=$IMAGE_NAME"
+    echo "source_dir=$SOURCE_DIR"
+    echo "codex_auth_dir=$CODEX_AUTH_DIR"
+  fi
+}
+
+case "$subcommand" in
+  build)
+    build_image "$@"
+    ;;
+  shell)
+    run_shell
+    ;;
+  exec)
+    run_exec "$@"
+    ;;
+  codex)
+    run_codex "$@"
+    ;;
+  stop)
+    stop_container
+    ;;
+  destroy)
+    destroy_container
+    ;;
+  help)
+    show_help
+    ;;
+  status)
+    show_status
+    ;;
+  *)
+    run_codex "$@"
+    ;;
+esac
