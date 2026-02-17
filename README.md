@@ -79,3 +79,9 @@ sb exec python3 --version
 ## License
 
 MIT. See `LICENSE`.
+
+## Contributions and support
+
+This code, as the license suggests, grants you the right to use it freely.
+It does not grant you the right to any support or help, which I, unfortunately,
+do not have time to provide. 
